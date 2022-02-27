@@ -11,6 +11,7 @@ using Random = UnityEngine.Random;
 [SuppressMessage("ReSharper", "InconsistentNaming")]
 public class GMScript : MonoBehaviour
 {
+    public int enemyMoveSight;
     public TileBase pieceTile;
     public TileBase emptyTile;
     public TileBase chunkTile;
@@ -242,7 +243,7 @@ public class GMScript : MonoBehaviour
             newPiece[i] = new Vector3Int(rotatedX, rotatedY);
         }
 
-        Array.Copy(newPiece, piece, piece.Length);
+        //Array.Copy(newPiece, piece, piece.Length);
         return newPiece;
     }
 
@@ -340,17 +341,75 @@ public class GMScript : MonoBehaviour
     private const int GOOD_SCORE = 10000;
     private int EvaluateEnemyPieceScore(Vector3Int[] piece, Vector3Int[] chunk, bool drop = true)
     {
-        if (null == piece || null == chunk) return -GOOD_SCORE;
-        var combined = drop ? DropPiece(piece,false).Concat(chunk).ToArray() : piece.Concat(chunk).ToArray();
+        //if (null == piece || null == chunk) return -GOOD_SCORE;
+        if (null == piece) return -GOOD_SCORE;
+
+        //Debug.Log(piece.Average(p => p.y));
+        //Debug.Log($"{DropPiece(piece,false).Average(p => p.y)}");
+
+        // Contains current piece pos and depth
+        Queue<(Vector3Int[], int)> q = new Queue<(Vector3Int[], int)>();
+        q.Enqueue((piece, 0));
+        int maxDepth = enemyMoveSight;
+        double avgHeight = 999;
         
-        var row = FindKillableRow(combined, _maxEx - _minEx + 1);
-        if (row != NO_ROW)
-        {
-            Debug.Log("FOUND A LINE: ");
-            return GOOD_SCORE; // LINE!
+        // For while loop check for lowest Y val to do specific move (Prioritize line clear moves first though).
+        while(q.Count != 0) {
+            // Dequeues piece
+            var currPiece = q.Dequeue();
+
+            // Gets the min height
+            var combined = DropPiece(currPiece.Item1,false);
+            double s = combined.Average(p => p.y);
+            if(s < avgHeight) {avgHeight = s;}
+
+            // Checks for row clear
+            var row = FindKillableRow(combined, _maxEx - _minEx + 1);
+            if (row != NO_ROW) {
+                Debug.Log("FOUND A LINE: ");
+                return GOOD_SCORE; // LINE!
+            }
+
+            // If max depth reached, then skips queuing further moves and evals position
+            // Or if the piece shifted down 1 is not a valid piece
+            if(currPiece.Item2 >= maxDepth || !ValidPiece(ShiftPiece(currPiece.Item1, 0, -1, false), false)) {
+                continue; // Doesn't queue new pieces
+            }
+
+            // Checks if other pieces are valid
+            var enemyGoLeft = ShiftPiece(currPiece.Item1, -1, -1, false);
+            var enemyGoRight = ShiftPiece(currPiece.Item1, 1, -1, false);
+            var enemyStay = ShiftPiece(currPiece.Item1, 0, -1, false);
+            var enemyGoRotate = RotatePiece(currPiece.Item1, false);
+            Vector3Int[][] enemyOptions = {enemyGoLeft, enemyGoRight, enemyGoRotate, enemyStay};
+            var validOptions = enemyOptions.Where(p => ValidPiece(p, false)).ToArray();
+
+            // If no valid options, then evals position
+            if (!validOptions.Any()) {
+                Debug.Log("No Valid children.");
+                continue;
+            };
+
+            // Adds the other pieces to the queue
+            foreach(var opt in validOptions) {
+                q.Enqueue((opt, currPiece.Item2 + 1));
+            }
         }
-        if (DEBUG_MODE) Debug.Log($"{combined.Average(p => p.y)}");//\n{ChunkToString(combined)}");
-        return 100 * (int) (BOUNDS_MAX - combined.Average(p => p.y)); // HIGHEST SCORE = LOWEST AVERAGE 
+
+        Debug.Log($"AVG: {avgHeight}, PH: {piece.Average(p => p.y)}");
+        return (int) (100 * (BOUNDS_MAX - avgHeight));
+        
+        // var combined = drop ? DropPiece(piece,false).Concat(chunk).ToArray() : piece.Concat(chunk).ToArray();
+        
+        // var row = FindKillableRow(combined, _maxEx - _minEx + 1);
+        // if (row != NO_ROW)
+        // {
+        //     Debug.Log("FOUND A LINE: ");
+        //     return GOOD_SCORE; // LINE!
+        // }
+
+        // if (DEBUG_MODE) Debug.Log($"{combined.Average(p => p.y)}");//\n{ChunkToString(combined)}");
+        // return 100 * (int) (BOUNDS_MAX - combined.Average(p => p.y)); // HIGHEST SCORE = LOWEST AVERAGE 
     }
 
     private Vector3Int[] EnemyChooseAction(Vector3Int[] piece)
@@ -362,9 +421,13 @@ public class GMScript : MonoBehaviour
         Vector3Int[][] enemyOptions = {enemyGoLeft, enemyGoRight, enemyGoRotate, piece};
         var validOptions = enemyOptions.Where(p => ValidPiece(p, false)).ToArray();
         if (!validOptions.Any()) return piece;
+        // Gets max score of a move
         var maxScore = validOptions.Max(p => EvaluateEnemyPieceScore(p, _enemyChunk));
+
+        // Gets the options that have the max score
         validOptions = validOptions.Where(p => EvaluateEnemyPieceScore(p, _enemyChunk) == maxScore).ToArray();
         if (DEBUG_MODE) Debug.Log($"max score = {maxScore}; options = {validOptions.Length}");
+        // Randomly choose between the max score elements
         return validOptions.ElementAt(Random.Range(0, validOptions.Count())); 
     }
     
